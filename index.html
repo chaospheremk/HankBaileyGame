@@ -1009,80 +1009,581 @@ function spawnCollectParticles(x, y, color) {
 // ============================================================
 // SCROLLING BACKGROUND
 // ============================================================
+// Room width for the cycling system — each room is this wide in world units
+const ROOM_W = 900;
+const TOTAL_CYCLE = ROOM_W * 3; // 3 rooms loop
+
 class ScrollingBackground {
-  constructor() { this.offset1 = 0; this.offset2 = 0; this.offset3 = 0; }
+  constructor() {
+    this.worldOffset = 0; // Total distance scrolled
+  }
 
   update(dt, speed) {
-    this.offset1 = (this.offset1 + speed * 0.3 * dt) % LOGICAL_W;
-    this.offset2 = (this.offset2 + speed * 0.6 * dt) % LOGICAL_W;
-    this.offset3 = (this.offset3 + speed * dt) % LOGICAL_W;
+    this.worldOffset += speed * dt;
   }
 
   draw(time) {
+    // Fill base
     ctx.fillStyle = COLORS.parchment;
     ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
-    this._drawWallLayer();
-    this._drawFurnitureLayer();
-    this._drawFloorLayer();
-  }
 
-  _drawWallLayer() {
-    const off = this.offset1;
-    ctx.fillStyle = COLORS.wallpaper1;
-    for (let i = -1; i < 30; i++) ctx.fillRect(i * 60 - (off % 60), 0, 30, GROUND_Y);
-    ctx.fillStyle = 'rgba(200, 180, 140, 0.15)';
-    for (let i = -1; i < 20; i++) {
-      const x = i * 120 - (off % 120);
-      ctx.strokeStyle = 'rgba(139, 107, 74, 0.2)'; ctx.lineWidth = 2;
-      roundRect(x + 20, 30, 60, 45, 3); ctx.stroke();
-      ctx.fillStyle = 'rgba(200, 180, 140, 0.15)';
-      roundRect(x + 24, 34, 52, 37, 1); ctx.fill();
-    }
+    // Determine which rooms are visible. We tile rooms across the screen.
+    // Slow parallax for wall (0.3x), medium for furniture (0.6x), fast for floor (1x).
+    this._drawLayer(0.3, time, 'wall');
+    this._drawLayer(0.6, time, 'furniture');
+    this._drawLayer(1.0, time, 'floor');
+
+    // Baseboard (always on top of wall, under floor)
     ctx.fillStyle = '#B09070'; ctx.fillRect(0, GROUND_Y - 8, LOGICAL_W, 8);
     ctx.fillStyle = '#A08060'; ctx.fillRect(0, GROUND_Y - 3, LOGICAL_W, 3);
   }
 
-  _drawFurnitureLayer() {
-    const off = this.offset2;
-    ctx.fillStyle = 'rgba(120, 90, 60, 0.12)';
-    for (let i = -1; i < 5; i++) {
-      const bx = i * 300 - (off % 300);
-      roundRect(bx + 10, GROUND_Y - 70, 80, 65, 8); ctx.fill();
-      roundRect(bx + 10, GROUND_Y - 85, 80, 20, 6); ctx.fill();
-      roundRect(bx + 130, GROUND_Y - 100, 40, 95, 3); ctx.fill();
-      ctx.strokeStyle = 'rgba(120, 90, 60, 0.08)'; ctx.lineWidth = 1;
-      for (let s = 0; s < 4; s++) {
-        ctx.beginPath();
-        ctx.moveTo(bx + 132, GROUND_Y - 80 + s * 22);
-        ctx.lineTo(bx + 168, GROUND_Y - 80 + s * 22);
-        ctx.stroke();
-      }
-      ctx.fillStyle = 'rgba(100, 140, 70, 0.12)';
-      ctx.beginPath(); ctx.arc(bx + 220, GROUND_Y - 60, 20, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(120, 90, 60, 0.12)';
-      ctx.fillRect(bx + 215, GROUND_Y - 40, 10, 35);
+  _drawLayer(parallax, time, layer) {
+    const off = this.worldOffset * parallax;
+    // We need to draw enough rooms to cover the screen
+    // Find the leftmost room edge visible on screen
+    const cycleOff = off % TOTAL_CYCLE;
+    const startRoom = Math.floor(cycleOff / ROOM_W);
+
+    for (let r = 0; r < 4; r++) { // Draw up to 4 rooms to cover screen + overlap
+      const roomIdx = (startRoom + r) % 3;
+      const roomWorldX = (startRoom + r) * ROOM_W;
+      const screenX = roomWorldX - cycleOff;
+      if (screenX > LOGICAL_W + 100) break;
+      if (screenX + ROOM_W < -100) continue;
+
+      if (layer === 'wall') this._drawRoomWall(roomIdx, screenX, time);
+      else if (layer === 'furniture') this._drawRoomFurniture(roomIdx, screenX, time);
+      else this._drawRoomFloor(roomIdx, screenX, time);
     }
   }
 
-  _drawFloorLayer() {
-    const off = this.offset3;
+  // ---- ROOM 0: LIVING ROOM ----
+  // Warm wallpaper with stripes, couch, bookshelf, big rug, warm lighting
+
+  // ---- ROOM 1: HALLWAY ----
+  // Narrower feel, plain walls, coat hooks, narrow runner rug, doorframes
+
+  // ---- ROOM 2: KITCHEN ----
+  // Tile backsplash, countertops, cabinets, tile floor pattern
+
+  _drawRoomWall(roomIdx, sx, time) {
+    switch (roomIdx) {
+      case 0: this._wallLivingRoom(sx); break;
+      case 1: this._wallHallway(sx); break;
+      case 2: this._wallKitchen(sx); break;
+    }
+  }
+
+  _drawRoomFurniture(roomIdx, sx, time) {
+    switch (roomIdx) {
+      case 0: this._furnitureLivingRoom(sx); break;
+      case 1: this._furnitureHallway(sx); break;
+      case 2: this._furnitureKitchen(sx); break;
+    }
+  }
+
+  _drawRoomFloor(roomIdx, sx, time) {
+    switch (roomIdx) {
+      case 0: this._floorLivingRoom(sx); break;
+      case 1: this._floorHallway(sx); break;
+      case 2: this._floorKitchen(sx); break;
+    }
+  }
+
+  // =============== LIVING ROOM WALL ===============
+  _wallLivingRoom(sx) {
+    // Warm striped wallpaper
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, 0, ROOM_W, GROUND_Y);
+    ctx.clip();
+    for (let i = 0; i < 30; i++) {
+      ctx.fillStyle = i % 2 === 0 ? '#EDE3C8' : '#E8DCBE';
+      ctx.fillRect(sx + i * 32, 0, 32, GROUND_Y);
+    }
+    // Picture frames
+    ctx.strokeStyle = '#8B6B4A'; ctx.lineWidth = 3;
+    // Large landscape painting
+    roundRect(sx + 80, 25, 90, 60, 4); ctx.stroke();
+    ctx.fillStyle = '#D4C4A0'; roundRect(sx + 84, 29, 82, 52, 2); ctx.fill();
+    // Little sunset in the painting
+    ctx.fillStyle = '#E8A060'; ctx.beginPath(); ctx.arc(sx + 125, 50, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#88B868';
+    ctx.fillRect(sx + 84, 60, 82, 21);
+    // Small cat photo
+    roundRect(sx + 250, 35, 40, 35, 3); ctx.stroke();
+    ctx.fillStyle = '#E8D8C0'; roundRect(sx + 253, 38, 34, 29, 1); ctx.fill();
+    ctx.fillStyle = COLORS.orange;
+    ctx.beginPath(); ctx.arc(sx + 270, 55, 8, 0, Math.PI * 2); ctx.fill(); // Cat blob
+    // Another frame
+    roundRect(sx + 500, 30, 55, 45, 3); ctx.stroke();
+    ctx.fillStyle = '#D8C8A8'; roundRect(sx + 503, 33, 49, 39, 1); ctx.fill();
+    // Window with curtains
+    ctx.fillStyle = '#88AACC';
+    roundRect(sx + 650, 15, 80, 70, 4); ctx.fill();
+    ctx.strokeStyle = '#FFF8EE'; ctx.lineWidth = 3;
+    roundRect(sx + 650, 15, 80, 70, 4); ctx.stroke();
+    // Window cross
+    ctx.beginPath(); ctx.moveTo(sx + 690, 15); ctx.lineTo(sx + 690, 85); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + 650, 50); ctx.lineTo(sx + 730, 50); ctx.stroke();
+    // Stars/moon outside
+    ctx.fillStyle = '#FFEEBB';
+    ctx.beginPath(); ctx.arc(sx + 710, 30, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,238,187,0.6)';
+    ctx.beginPath(); ctx.arc(sx + 665, 25, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx + 675, 35, 1.5, 0, Math.PI * 2); ctx.fill();
+    // Curtains
+    ctx.fillStyle = 'rgba(180, 100, 80, 0.25)';
+    ctx.fillRect(sx + 645, 12, 18, 78);
+    ctx.fillRect(sx + 717, 12, 18, 78);
+    ctx.restore();
+  }
+
+  // =============== HALLWAY WALL ===============
+  _wallHallway(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, 0, ROOM_W, GROUND_Y);
+    ctx.clip();
+    // Plain paint — slightly cooler tone
+    ctx.fillStyle = '#E0D8C8';
+    ctx.fillRect(sx, 0, ROOM_W, GROUND_Y);
+    // Chair rail molding
+    ctx.fillStyle = '#C8B898';
+    ctx.fillRect(sx, GROUND_Y * 0.55, ROOM_W, 4);
+    // Lower wall darker
+    ctx.fillStyle = '#D8CEB8';
+    ctx.fillRect(sx, GROUND_Y * 0.55 + 4, ROOM_W, GROUND_Y * 0.45);
+    // Doorframe left
+    ctx.fillStyle = '#B09070'; ctx.lineWidth = 4;
+    ctx.fillRect(sx + 60, 10, 8, GROUND_Y - 18);
+    ctx.fillRect(sx + 60, 10, 80, 8);
+    ctx.fillRect(sx + 132, 10, 8, GROUND_Y - 18);
+    // Door (slightly ajar)
+    ctx.fillStyle = '#A08060';
+    roundRect(sx + 68, 18, 64, GROUND_Y - 26, 2); ctx.fill();
+    // Door handle
+    ctx.fillStyle = '#C8A860';
+    ctx.beginPath(); ctx.arc(sx + 120, GROUND_Y * 0.5, 3, 0, Math.PI * 2); ctx.fill();
+    // Coat hooks
+    for (let i = 0; i < 3; i++) {
+      const hx = sx + 250 + i * 40;
+      ctx.fillStyle = '#8B7B5A';
+      ctx.fillRect(hx, 50, 4, 12);
+      ctx.beginPath(); ctx.arc(hx + 2, 50, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    // Coat on middle hook
+    ctx.fillStyle = 'rgba(100, 80, 120, 0.3)';
+    ctx.beginPath();
+    ctx.moveTo(sx + 285, 55);
+    ctx.lineTo(sx + 275, 110);
+    ctx.lineTo(sx + 300, 110);
+    ctx.closePath();
+    ctx.fill();
+    // Small hallway mirror
+    ctx.fillStyle = '#C0D0D8';
+    ctx.beginPath(); ctx.ellipse(sx + 450, 55, 22, 30, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#8B7B5A'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(sx + 450, 55, 22, 30, 0, 0, Math.PI * 2); ctx.stroke();
+    // Mirror shine
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath(); ctx.ellipse(sx + 443, 45, 8, 15, -0.3, 0, Math.PI * 2); ctx.fill();
+    // Light switch
+    ctx.fillStyle = '#E8E0D0';
+    roundRect(sx + 550, 80, 12, 18, 2); ctx.fill();
+    ctx.strokeStyle = '#B0A890'; ctx.lineWidth = 1;
+    roundRect(sx + 550, 80, 12, 18, 2); ctx.stroke();
+    // Second doorframe (to kitchen)
+    ctx.fillStyle = '#B09070';
+    ctx.fillRect(sx + 700, 10, 8, GROUND_Y - 18);
+    ctx.fillRect(sx + 700, 10, 100, 8);
+    ctx.fillRect(sx + 792, 10, 8, GROUND_Y - 18);
+    // Open doorway (darker inside)
+    ctx.fillStyle = '#C8B898';
+    ctx.fillRect(sx + 708, 18, 84, GROUND_Y - 26);
+    ctx.restore();
+  }
+
+  // =============== KITCHEN WALL ===============
+  _wallKitchen(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, 0, ROOM_W, GROUND_Y);
+    ctx.clip();
+    // Lighter, cleaner wall
+    ctx.fillStyle = '#E8E4D8';
+    ctx.fillRect(sx, 0, ROOM_W, GROUND_Y);
+    // Tile backsplash (upper portion)
+    const tileH = 80;
+    ctx.fillStyle = '#D8E0D4';
+    ctx.fillRect(sx, GROUND_Y - tileH - 8, ROOM_W, tileH);
+    // Individual tiles
+    ctx.strokeStyle = '#C8D0C4'; ctx.lineWidth = 1;
+    const tw = 24, th = 24;
+    for (let ty = 0; ty < Math.ceil(tileH / th); ty++) {
+      for (let tx = 0; tx < Math.ceil(ROOM_W / tw) + 1; tx++) {
+        const offset = (ty % 2) * tw * 0.5; // Brick pattern offset
+        roundRect(sx + tx * tw + offset, GROUND_Y - tileH - 8 + ty * th, tw - 2, th - 2, 1);
+        ctx.stroke();
+      }
+    }
+    // Upper cabinets
+    ctx.fillStyle = '#C8B898';
+    for (let i = 0; i < 3; i++) {
+      const cx = sx + 40 + i * 200;
+      roundRect(cx, 10, 130, 70, 4); ctx.fill();
+      // Cabinet doors
+      ctx.strokeStyle = '#B0A070'; ctx.lineWidth = 2;
+      roundRect(cx + 4, 14, 58, 62, 3); ctx.stroke();
+      roundRect(cx + 66, 14, 58, 62, 3); ctx.stroke();
+      // Handles
+      ctx.fillStyle = '#A09060';
+      ctx.fillRect(cx + 52, 38, 8, 3);
+      ctx.fillRect(cx + 72, 38, 8, 3);
+    }
+    // Window above sink (middle)
+    ctx.fillStyle = '#88AACC';
+    roundRect(sx + 320, 15, 70, 55, 3); ctx.fill();
+    ctx.strokeStyle = '#FFF8EE'; ctx.lineWidth = 2;
+    roundRect(sx + 320, 15, 70, 55, 3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + 355, 15); ctx.lineTo(sx + 355, 70); ctx.stroke();
+    // Moon
+    ctx.fillStyle = '#FFEEBB';
+    ctx.beginPath(); ctx.arc(sx + 340, 30, 5, 0, Math.PI * 2); ctx.fill();
+    // Countertop
+    ctx.fillStyle = '#A09878';
+    ctx.fillRect(sx, GROUND_Y - tileH - 14, ROOM_W, 8);
+    // Counter surface
+    ctx.fillStyle = '#D0C8B0';
+    ctx.fillRect(sx, GROUND_Y - tileH - 8, ROOM_W, 4);
+    // Items on counter
+    // Toaster
+    ctx.fillStyle = '#B0B0B0';
+    roundRect(sx + 80, GROUND_Y - tileH - 30, 30, 22, 4); ctx.fill();
+    ctx.fillStyle = '#888'; ctx.fillRect(sx + 87, GROUND_Y - tileH - 34, 6, 4);
+    ctx.fillRect(sx + 97, GROUND_Y - tileH - 34, 6, 4);
+    // Coffee mug
+    ctx.fillStyle = '#CC6644';
+    roundRect(sx + 530, GROUND_Y - tileH - 24, 16, 18, 3); ctx.fill();
+    ctx.strokeStyle = '#CC6644'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx + 548, GROUND_Y - tileH - 16, 5, -1, 1); ctx.stroke();
+    // Cat food bowls on floor
+    ctx.fillStyle = '#7EC8A4';
+    ctx.beginPath(); ctx.ellipse(sx + 700, GROUND_Y - 4, 18, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#6AB894';
+    ctx.beginPath(); ctx.ellipse(sx + 700, GROUND_Y - 6, 14, 4, 0, 0, Math.PI); ctx.fill();
+    // Second bowl
+    ctx.fillStyle = '#7EC8A4';
+    ctx.beginPath(); ctx.ellipse(sx + 745, GROUND_Y - 4, 18, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#88AACC';
+    ctx.beginPath(); ctx.ellipse(sx + 745, GROUND_Y - 6, 14, 4, 0, 0, Math.PI); ctx.fill();
+    ctx.restore();
+  }
+
+  // =============== LIVING ROOM FURNITURE ===============
+  _furnitureLivingRoom(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, 0, ROOM_W, GROUND_Y);
+    ctx.clip();
+    // Couch
+    ctx.fillStyle = '#8B6858';
+    roundRect(sx + 30, GROUND_Y - 65, 120, 60, 10); ctx.fill();
+    ctx.fillStyle = '#7B5848'; // Back
+    roundRect(sx + 30, GROUND_Y - 80, 120, 20, 8); ctx.fill();
+    // Armrests
+    ctx.fillStyle = '#8B6858';
+    roundRect(sx + 25, GROUND_Y - 70, 15, 45, 6); ctx.fill();
+    roundRect(sx + 140, GROUND_Y - 70, 15, 45, 6); ctx.fill();
+    // Cushion lines
+    ctx.strokeStyle = '#6B4838'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(sx + 70, GROUND_Y - 60); ctx.lineTo(sx + 70, GROUND_Y - 10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + 110, GROUND_Y - 60); ctx.lineTo(sx + 110, GROUND_Y - 10); ctx.stroke();
+    // Pillows
+    ctx.fillStyle = '#CC9966';
+    ctx.beginPath(); ctx.ellipse(sx + 45, GROUND_Y - 50, 12, 15, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#99BB88';
+    ctx.beginPath(); ctx.ellipse(sx + 135, GROUND_Y - 48, 10, 13, 0.3, 0, Math.PI * 2); ctx.fill();
+
+    // Bookshelf
+    ctx.fillStyle = '#8B7050';
+    roundRect(sx + 220, GROUND_Y - 110, 50, 105, 3); ctx.fill();
+    // Shelves
+    ctx.fillStyle = '#7B6040';
+    for (let s = 0; s < 4; s++) {
+      ctx.fillRect(sx + 222, GROUND_Y - 100 + s * 26, 46, 3);
+    }
+    // Books
+    const bookColors = ['#CC6644', '#6688AA', '#88AA66', '#CCAA44', '#AA6688', '#668866'];
+    for (let s = 0; s < 3; s++) {
+      const shelfY = GROUND_Y - 97 + s * 26;
+      let bx = sx + 224;
+      for (let b = 0; b < 5; b++) {
+        const bw = 4 + Math.random() * 5;
+        ctx.fillStyle = bookColors[(s * 5 + b) % bookColors.length];
+        ctx.fillRect(bx, shelfY, bw, 22);
+        bx += bw + 1;
+      }
+    }
+
+    // Floor lamp
+    ctx.fillStyle = '#AA9070';
+    ctx.fillRect(sx + 190, GROUND_Y - 90, 4, 85);
+    ctx.fillStyle = '#DDCC99';
+    ctx.beginPath();
+    ctx.moveTo(sx + 180, GROUND_Y - 90);
+    ctx.lineTo(sx + 204, GROUND_Y - 90);
+    ctx.lineTo(sx + 198, GROUND_Y - 110);
+    ctx.lineTo(sx + 186, GROUND_Y - 110);
+    ctx.closePath();
+    ctx.fill();
+    // Lamp glow
+    ctx.fillStyle = 'rgba(255, 230, 150, 0.08)';
+    ctx.beginPath(); ctx.arc(sx + 192, GROUND_Y - 80, 40, 0, Math.PI * 2); ctx.fill();
+
+    // Houseplant
+    ctx.fillStyle = '#B06030';
+    ctx.beginPath();
+    ctx.moveTo(sx + 360, GROUND_Y - 30); ctx.lineTo(sx + 385, GROUND_Y - 30);
+    ctx.lineTo(sx + 382, GROUND_Y - 5); ctx.lineTo(sx + 363, GROUND_Y - 5);
+    ctx.fill();
+    ctx.fillStyle = '#5A9A44';
+    ctx.beginPath(); ctx.ellipse(sx + 372, GROUND_Y - 40, 18, 14, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#4A8A34';
+    ctx.beginPath(); ctx.ellipse(sx + 368, GROUND_Y - 48, 10, 10, -0.4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx + 378, GROUND_Y - 46, 8, 8, 0.5, 0, Math.PI * 2); ctx.fill();
+
+    // TV stand + TV
+    ctx.fillStyle = '#6B5B48';
+    roundRect(sx + 480, GROUND_Y - 40, 100, 35, 4); ctx.fill();
+    // TV
+    ctx.fillStyle = '#222';
+    roundRect(sx + 495, GROUND_Y - 85, 70, 45, 3); ctx.fill();
+    ctx.fillStyle = '#334';
+    roundRect(sx + 498, GROUND_Y - 82, 64, 39, 2); ctx.fill();
+    // TV stand
+    ctx.fillStyle = '#6B5B48';
+    ctx.fillRect(sx + 525, GROUND_Y - 40, 10, 5);
+
+    // Cat tree far right
+    ctx.fillStyle = '#C4A882';
+    ctx.fillRect(sx + 730, GROUND_Y - 100, 12, 95);
+    // Platforms
+    ctx.fillStyle = '#C4A882';
+    roundRect(sx + 715, GROUND_Y - 105, 42, 10, 4); ctx.fill();
+    roundRect(sx + 720, GROUND_Y - 60, 35, 8, 3); ctx.fill();
+    // Scratching post wrap
+    ctx.strokeStyle = '#D4B892'; ctx.lineWidth = 2;
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.moveTo(sx + 730, GROUND_Y - 95 + i * 10);
+      ctx.lineTo(sx + 742, GROUND_Y - 90 + i * 10);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // =============== HALLWAY FURNITURE ===============
+  _furnitureHallway(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, 0, ROOM_W, GROUND_Y);
+    ctx.clip();
+    // Narrow console table
+    ctx.fillStyle = '#8B7050';
+    roundRect(sx + 180, GROUND_Y - 45, 70, 40, 3); ctx.fill();
+    // Table legs
+    ctx.fillRect(sx + 183, GROUND_Y - 10, 5, 8);
+    ctx.fillRect(sx + 242, GROUND_Y - 10, 5, 8);
+    // Keys & mail on table
+    ctx.fillStyle = '#C8C040';
+    ctx.beginPath(); ctx.ellipse(sx + 200, GROUND_Y - 48, 6, 3, 0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#E8E0D0';
+    roundRect(sx + 215, GROUND_Y - 50, 25, 8, 1); ctx.fill();
+
+    // Shoe rack
+    ctx.fillStyle = '#7B6040';
+    roundRect(sx + 380, GROUND_Y - 25, 60, 20, 3); ctx.fill();
+    // Shoes
+    ctx.fillStyle = '#444';
+    ctx.beginPath(); ctx.ellipse(sx + 395, GROUND_Y - 8, 10, 5, 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#884444';
+    ctx.beginPath(); ctx.ellipse(sx + 420, GROUND_Y - 8, 10, 5, -0.1, 0, Math.PI * 2); ctx.fill();
+
+    // Umbrella stand
+    ctx.fillStyle = '#6B5B48';
+    ctx.beginPath();
+    ctx.moveTo(sx + 560, GROUND_Y - 30); ctx.lineTo(sx + 580, GROUND_Y - 30);
+    ctx.lineTo(sx + 577, GROUND_Y - 5); ctx.lineTo(sx + 563, GROUND_Y - 5);
+    ctx.fill();
+    // Umbrella handle sticking out
+    ctx.strokeStyle = '#3366AA'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(sx + 570, GROUND_Y - 30);
+    ctx.lineTo(sx + 568, GROUND_Y - 55);
+    ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx + 563, GROUND_Y - 55, 5, -Math.PI * 0.5, Math.PI * 0.5); ctx.stroke();
+    ctx.restore();
+  }
+
+  // =============== KITCHEN FURNITURE ===============
+  _furnitureKitchen(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, 0, ROOM_W, GROUND_Y);
+    ctx.clip();
+    // Lower cabinets
+    ctx.fillStyle = '#C8B898';
+    for (let i = 0; i < 4; i++) {
+      const cx = sx + 20 + i * 160;
+      if (i === 2) continue; // Gap for sink area
+      roundRect(cx, GROUND_Y - 55, 130, 50, 3); ctx.fill();
+      // Cabinet doors
+      ctx.strokeStyle = '#B0A070'; ctx.lineWidth = 1.5;
+      roundRect(cx + 4, GROUND_Y - 51, 58, 42, 2); ctx.stroke();
+      roundRect(cx + 66, GROUND_Y - 51, 58, 42, 2); ctx.stroke();
+      // Handles
+      ctx.fillStyle = '#A09060';
+      ctx.fillRect(cx + 52, GROUND_Y - 33, 8, 3);
+      ctx.fillRect(cx + 72, GROUND_Y - 33, 8, 3);
+    }
+
+    // Sink area
+    ctx.fillStyle = '#B8B0A0';
+    roundRect(sx + 330, GROUND_Y - 50, 80, 12, 2); ctx.fill();
+    // Faucet
+    ctx.strokeStyle = '#999'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(sx + 370, GROUND_Y - 50);
+    ctx.lineTo(sx + 370, GROUND_Y - 70);
+    ctx.arc(sx + 378, GROUND_Y - 70, 8, Math.PI, 0);
+    ctx.stroke();
+
+    // Fridge
+    ctx.fillStyle = '#D8D8D8';
+    roundRect(sx + 700, GROUND_Y - 120, 70, 115, 4); ctx.fill();
+    ctx.strokeStyle = '#C0C0C0'; ctx.lineWidth = 1;
+    // Fridge door split
+    ctx.beginPath(); ctx.moveTo(sx + 702, GROUND_Y - 45); ctx.lineTo(sx + 768, GROUND_Y - 45); ctx.stroke();
+    // Handle
+    ctx.fillStyle = '#B0B0B0';
+    roundRect(sx + 758, GROUND_Y - 90, 4, 30, 2); ctx.fill();
+    roundRect(sx + 758, GROUND_Y - 40, 4, 20, 2); ctx.fill();
+    // Fridge magnets
+    ctx.fillStyle = '#CC4444';
+    ctx.beginPath(); ctx.arc(sx + 720, GROUND_Y - 95, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#4488CC';
+    ctx.beginPath(); ctx.arc(sx + 735, GROUND_Y - 100, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#44AA44';
+    ctx.beginPath(); ctx.arc(sx + 715, GROUND_Y - 80, 3, 0, Math.PI * 2); ctx.fill();
+
+    // Stove
+    ctx.fillStyle = '#C8C8C8';
+    roundRect(sx + 550, GROUND_Y - 55, 90, 50, 3); ctx.fill();
+    // Burners
+    ctx.strokeStyle = '#888'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx + 575, GROUND_Y - 48, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx + 615, GROUND_Y - 48, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx + 575, GROUND_Y - 28, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx + 615, GROUND_Y - 28, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+
+  // =============== FLOOR LAYERS ===============
+  _floorLivingRoom(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, GROUND_Y, ROOM_W, LOGICAL_H - GROUND_Y);
+    ctx.clip();
+    // Hardwood floor
     ctx.fillStyle = COLORS.floor;
-    ctx.fillRect(0, GROUND_Y, LOGICAL_W, LOGICAL_H - GROUND_Y);
+    ctx.fillRect(sx, GROUND_Y, ROOM_W, LOGICAL_H - GROUND_Y);
     ctx.strokeStyle = COLORS.floorDark; ctx.lineWidth = 1;
-    for (let i = -1; i < 25; i++) {
-      ctx.beginPath(); ctx.moveTo(i * 60 - (off % 60), GROUND_Y);
-      ctx.lineTo(i * 60 - (off % 60), LOGICAL_H); ctx.stroke();
+    for (let i = 0; i < 30; i++) {
+      ctx.beginPath(); ctx.moveTo(sx + i * 35, GROUND_Y);
+      ctx.lineTo(sx + i * 35, LOGICAL_H); ctx.stroke();
     }
-    const rugX = 200 - (off % 400);
-    for (let r = -1; r < 3; r++) {
-      const rx = rugX + r * 400;
-      ctx.fillStyle = 'rgba(192, 112, 80, 0.25)'; roundRect(rx, GROUND_Y + 8, 160, 40, 4); ctx.fill();
-      ctx.fillStyle = 'rgba(168, 88, 56, 0.15)'; roundRect(rx + 10, GROUND_Y + 14, 140, 28, 3); ctx.fill();
+    // Big cozy rug
+    ctx.fillStyle = 'rgba(180, 80, 60, 0.3)';
+    roundRect(sx + 60, GROUND_Y + 5, 250, 50, 6); ctx.fill();
+    ctx.fillStyle = 'rgba(160, 60, 40, 0.2)';
+    roundRect(sx + 75, GROUND_Y + 12, 220, 36, 4); ctx.fill();
+    // Rug pattern — diamond shapes
+    ctx.strokeStyle = 'rgba(200, 120, 80, 0.2)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const dx = sx + 110 + i * 45;
+      ctx.beginPath();
+      ctx.moveTo(dx, GROUND_Y + 20); ctx.lineTo(dx + 10, GROUND_Y + 30);
+      ctx.lineTo(dx, GROUND_Y + 40); ctx.lineTo(dx - 10, GROUND_Y + 30);
+      ctx.closePath(); ctx.stroke();
     }
-    ctx.fillStyle = 'rgba(200, 100, 100, 0.15)';
-    for (let i = -1; i < 8; i++) {
-      ctx.beginPath(); ctx.arc(i * 150 + 50 - (off % 150), GROUND_Y + 35, 4, 0, Math.PI * 2); ctx.fill();
+    // Scattered cat toys
+    ctx.fillStyle = 'rgba(200, 100, 150, 0.25)';
+    ctx.beginPath(); ctx.arc(sx + 420, GROUND_Y + 30, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(100, 180, 100, 0.2)';
+    ctx.beginPath(); ctx.arc(sx + 600, GROUND_Y + 25, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  _floorHallway(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, GROUND_Y, ROOM_W, LOGICAL_H - GROUND_Y);
+    ctx.clip();
+    // Darker wood runner style
+    ctx.fillStyle = '#B8A070';
+    ctx.fillRect(sx, GROUND_Y, ROOM_W, LOGICAL_H - GROUND_Y);
+    ctx.strokeStyle = '#A89060'; ctx.lineWidth = 1;
+    for (let i = 0; i < 30; i++) {
+      ctx.beginPath(); ctx.moveTo(sx + i * 35, GROUND_Y);
+      ctx.lineTo(sx + i * 35, LOGICAL_H); ctx.stroke();
     }
+    // Long narrow runner rug
+    ctx.fillStyle = 'rgba(60, 80, 120, 0.2)';
+    roundRect(sx + 30, GROUND_Y + 12, ROOM_W - 60, 35, 3); ctx.fill();
+    ctx.fillStyle = 'rgba(80, 100, 140, 0.15)';
+    roundRect(sx + 45, GROUND_Y + 17, ROOM_W - 90, 25, 2); ctx.fill();
+    // Stripe pattern on runner
+    ctx.strokeStyle = 'rgba(60, 80, 120, 0.1)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 20; i++) {
+      const lx = sx + 55 + i * 42;
+      ctx.beginPath(); ctx.moveTo(lx, GROUND_Y + 18); ctx.lineTo(lx, GROUND_Y + 41); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  _floorKitchen(sx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, GROUND_Y, ROOM_W, LOGICAL_H - GROUND_Y);
+    ctx.clip();
+    // Checkerboard tile floor
+    ctx.fillStyle = '#E0D8C8';
+    ctx.fillRect(sx, GROUND_Y, ROOM_W, LOGICAL_H - GROUND_Y);
+    const tileSize = 25;
+    for (let ty = 0; ty < 3; ty++) {
+      for (let tx = 0; tx < Math.ceil(ROOM_W / tileSize) + 1; tx++) {
+        if ((tx + ty) % 2 === 0) {
+          ctx.fillStyle = 'rgba(180, 175, 160, 0.4)';
+          ctx.fillRect(sx + tx * tileSize, GROUND_Y + ty * tileSize, tileSize, tileSize);
+        }
+      }
+    }
+    // Tile grout lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.05)'; ctx.lineWidth = 1;
+    for (let tx = 0; tx <= Math.ceil(ROOM_W / tileSize); tx++) {
+      ctx.beginPath(); ctx.moveTo(sx + tx * tileSize, GROUND_Y);
+      ctx.lineTo(sx + tx * tileSize, LOGICAL_H); ctx.stroke();
+    }
+    for (let ty = 0; ty <= 3; ty++) {
+      ctx.beginPath(); ctx.moveTo(sx, GROUND_Y + ty * tileSize);
+      ctx.lineTo(sx + ROOM_W, GROUND_Y + ty * tileSize); ctx.stroke();
+    }
+    // Anti-fatigue mat near sink
+    ctx.fillStyle = 'rgba(80, 80, 80, 0.15)';
+    roundRect(sx + 310, GROUND_Y + 5, 120, 45, 3); ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -1181,6 +1682,9 @@ const gameState = {
   screenShake: 0,
   newHighScore: false,
   speedBoostTimer: 0,
+  currentRoom: '',
+  roomLabelAlpha: 0,
+  roomLabelTimer: 0,
   selectCursor: 0, // 0 = hank, 1 = bailey
 };
 
@@ -1635,6 +2139,17 @@ function drawHUD() {
     ctx.textAlign = 'left';
   }
 
+  // Room label (fades in when entering a new room)
+  if (gameState.roomLabelAlpha > 0) {
+    ctx.save();
+    ctx.globalAlpha = gameState.roomLabelAlpha * 0.6;
+    ctx.textAlign = 'center';
+    ctx.font = '18px "Patrick Hand", cursive';
+    ctx.fillStyle = COLORS.text;
+    ctx.fillText(gameState.currentRoom, LOGICAL_W / 2, LOGICAL_H - 12);
+    ctx.restore();
+  }
+
   drawMuteButton();
 }
 
@@ -1761,6 +2276,23 @@ function updateGame(dt, time) {
 
   playerCat.update(dt);
   bg.update(dt, effectiveSpeed);
+
+  // Track which room the player is in (based on floor-layer parallax = 1x)
+  const roomNames = ['Living Room', 'Hallway', 'Kitchen'];
+  const floorOffset = bg.worldOffset % TOTAL_CYCLE;
+  const currentRoomIdx = Math.floor(floorOffset / ROOM_W) % 3;
+  const newRoom = roomNames[currentRoomIdx];
+  if (newRoom !== gameState.currentRoom) {
+    gameState.currentRoom = newRoom;
+    gameState.roomLabelAlpha = 1.0;
+    gameState.roomLabelTimer = 2.0;
+  }
+  if (gameState.roomLabelTimer > 0) {
+    gameState.roomLabelTimer -= dt;
+    if (gameState.roomLabelTimer < 0.5) {
+      gameState.roomLabelAlpha = Math.max(0, gameState.roomLabelTimer / 0.5);
+    }
+  }
 
   obstacleTimer -= dt;
   if (obstacleTimer <= 0) {
