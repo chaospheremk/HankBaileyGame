@@ -1,0 +1,1810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Zoomies</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&family=Patrick+Hand&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #3a2a1a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    max-width: 900px;
+    width: 100%;
+    image-rendering: auto;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ============================================================
+// CONSTANTS & CONFIG
+// ============================================================
+const LOGICAL_W = 800;
+const LOGICAL_H = 300;
+const GROUND_Y = 240;
+const GRAVITY = 1800;
+const COLORS = {
+  parchment: '#F5EDD6',
+  orange: '#E8824A',
+  orangeDark: '#C06830',
+  black: '#2C2C3A',
+  blackLight: '#4A4A5E',
+  floor: '#C4A882',
+  floorDark: '#A08060',
+  mint: '#7EC8A4',
+  mintDark: '#5AA880',
+  text: '#4A3728',
+  textLight: '#6B5740',
+  red: '#E85A5A',
+  white: '#FFF8EE',
+  wallpaper1: '#EDE3C8',
+  wallpaper2: '#E8D8B8',
+  hallway: '#D4C4A0',
+  kitchen: '#E0D0B0',
+  rugRed: '#C07050',
+  rugPattern: '#A85838',
+  shadow: 'rgba(0,0,0,0.12)',
+};
+
+const CAT_CONFIG = {
+  hank: {
+    width: 60, height: 45,
+    jumpVel: -520,
+    canDoubleJump: false,
+    color: COLORS.orange,
+    colorDark: COLORS.orangeDark,
+    duckHeight: 22,
+  },
+  bailey: {
+    width: 45, height: 38,
+    jumpVel: -480,
+    canDoubleJump: true,
+    color: COLORS.black,
+    colorDark: COLORS.blackLight,
+    duckHeight: 18,
+  },
+};
+
+const OBSTACLE_TYPES = {
+  roomba: { width: 50, height: 20, speed: 1.0, color: '#555', label: 'Roomba' },
+  sprayBottle: { width: 22, height: 35, speed: 0.8, color: '#5588CC', label: 'Spray' },
+  vetCarrier: { width: 65, height: 55, speed: 0.6, color: '#8B6B4A', label: 'Carrier' },
+  broom: { width: 15, height: 60, speed: 0.85, color: '#9B7B4A', label: 'Broom' },
+  plant: { width: 35, height: 30, speed: 1.1, color: '#6B9B50', label: 'Plant' },
+};
+
+const COLLECTIBLE_TYPES = {
+  treat: { width: 20, height: 20, points: 10, color: '#D4944A' },
+  yarn: { width: 22, height: 22, points: 25, color: '#CC5588' },
+  sunspot: { width: 30, height: 16, points: 0, color: '#FFE87A' },
+  pawPrint: { width: 20, height: 20, points: 0, color: COLORS.mint },
+};
+
+// ============================================================
+// CANVAS SETUP
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+canvas.width = LOGICAL_W * dpr;
+canvas.height = LOGICAL_H * dpr;
+ctx.scale(dpr, dpr);
+
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function aabbOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function randomRange(min, max) { return min + Math.random() * (max - min); }
+
+// ============================================================
+// ASSET DRAWING FUNCTIONS
+// ============================================================
+function drawCat(cat, time) {
+  const cfg = CAT_CONFIG[cat.type];
+  const x = cat.x;
+  const y = cat.y;
+  const w = cfg.width;
+  const h = cat.ducking ? cfg.duckHeight : cfg.height;
+  const flip = cat.facingLeft ? -1 : 1;
+
+  ctx.save();
+  ctx.translate(x + w / 2, y + h);
+
+  if (cat.stunTimer > 0) {
+    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(time * 20);
+  }
+  if (cat.invincible) {
+    ctx.globalAlpha = 0.7 + 0.3 * Math.sin(time * 15);
+    ctx.shadowColor = COLORS.mint;
+    ctx.shadowBlur = 15;
+  }
+
+  ctx.scale(flip, 1);
+
+  // Shadow on ground
+  ctx.fillStyle = COLORS.shadow;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, w * 0.4, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.shadowColor = 'rgba(0,0,0,0.15)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = cfg.color;
+  roundRect(-w / 2, -h, w, h, cat.ducking ? 8 : 12);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Belly highlight
+  ctx.fillStyle = cat.type === 'hank' ? '#F0A870' : '#3E3E52';
+  roundRect(-w / 2 + 6, -h + 8, w - 12, h * 0.5, 8);
+  ctx.fill();
+
+  if (!cat.ducking) {
+    // Ears
+    const earW = cat.type === 'hank' ? 10 : 8;
+    const earH = cat.type === 'hank' ? 12 : 15;
+    ctx.fillStyle = cfg.color;
+    // Left ear
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 + 4, -h);
+    ctx.lineTo(-w / 2 + 4 - earW / 2, -h - earH);
+    ctx.lineTo(-w / 2 + 4 + earW, -h);
+    ctx.fill();
+    // Right ear
+    ctx.beginPath();
+    ctx.moveTo(w / 2 - 4 - earW, -h);
+    ctx.lineTo(w / 2 - 4 + earW / 2, -h - earH);
+    ctx.lineTo(w / 2 - 4, -h);
+    ctx.fill();
+
+    // Inner ears
+    ctx.fillStyle = cat.type === 'hank' ? '#F0A870' : '#5A5A70';
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 + 6, -h);
+    ctx.lineTo(-w / 2 + 4 - earW / 2 + 3, -h - earH + 4);
+    ctx.lineTo(-w / 2 + 4 + earW - 2, -h);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(w / 2 - 4 - earW + 2, -h);
+    ctx.lineTo(w / 2 - 4 + earW / 2 - 3, -h - earH + 4);
+    ctx.lineTo(w / 2 - 6, -h);
+    ctx.fill();
+
+    // Eyes
+    const eyeY = -h + (cat.type === 'hank' ? 14 : 12);
+    const eyeSpacing = cat.type === 'hank' ? 10 : 8;
+    const blinkPhase = Math.sin(time * 2);
+    const eyeH = (blinkPhase > 0.95) ? 1 : (cat.type === 'hank' ? 5 : 6);
+
+    // Bailey glances sideways occasionally
+    let eyeOffsetX = 0;
+    if (cat.type === 'bailey' && !cat.wallStaring) {
+      eyeOffsetX = Math.sin(time * 1.3) > 0.8 ? 2 : 0;
+    }
+    if (cat.wallStaring) {
+      eyeOffsetX = 4;
+    }
+
+    ctx.fillStyle = cat.stunTimer > 0 ? '#FF6666' : COLORS.white;
+    ctx.beginPath();
+    ctx.ellipse(-eyeSpacing + eyeOffsetX, eyeY, 5, eyeH, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(eyeSpacing + eyeOffsetX, eyeY, 5, eyeH, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pupils
+    if (eyeH > 2) {
+      ctx.fillStyle = cat.stunTimer > 0 ? '#CC0000' : '#222';
+      const pupilR = cat.type === 'bailey' ? 2.5 : 2;
+      ctx.beginPath();
+      ctx.ellipse(-eyeSpacing + eyeOffsetX + 1, eyeY + 0.5, pupilR, pupilR, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(eyeSpacing + eyeOffsetX + 1, eyeY + 0.5, pupilR, pupilR, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Nose
+    ctx.fillStyle = cat.type === 'hank' ? '#E07050' : '#555';
+    ctx.beginPath();
+    ctx.moveTo(0, eyeY + 7);
+    ctx.lineTo(-3, eyeY + 10);
+    ctx.lineTo(3, eyeY + 10);
+    ctx.fill();
+
+    // Mouth
+    ctx.strokeStyle = cfg.colorDark;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-3, eyeY + 10);
+    ctx.lineTo(0, eyeY + 13);
+    ctx.lineTo(3, eyeY + 10);
+    ctx.stroke();
+
+    // Whiskers
+    ctx.strokeStyle = cat.type === 'hank' ? '#D08050' : '#777';
+    ctx.lineWidth = 0.8;
+    for (let i = -1; i <= 1; i += 2) {
+      ctx.beginPath();
+      ctx.moveTo(i * 8, eyeY + 9);
+      ctx.lineTo(i * 22, eyeY + 6 + i);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(i * 8, eyeY + 11);
+      ctx.lineTo(i * 22, eyeY + 12 + i);
+      ctx.stroke();
+    }
+  }
+
+  // Tail
+  if (!cat.ducking) {
+    const tailWag = Math.sin(time * (cat.type === 'bailey' ? 8 : 3)) * (cat.type === 'bailey' ? 12 : 8);
+    ctx.strokeStyle = cfg.color;
+    ctx.lineWidth = cat.type === 'hank' ? 6 : 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, -h * 0.3);
+    ctx.bezierCurveTo(
+      -w / 2 - 15, -h * 0.5 + tailWag,
+      -w / 2 - 20 + tailWag * 0.3, -h * 0.9,
+      -w / 2 - 10 + tailWag * 0.5, -h * 1.1
+    );
+    ctx.stroke();
+  }
+
+  // Legs (animated trot)
+  const legPhase = cat.onGround ? time * (cat.type === 'bailey' ? 14 : 8) : 0;
+  ctx.fillStyle = cfg.colorDark;
+  const legW = cat.type === 'hank' ? 8 : 6;
+  const legH = cat.ducking ? 4 : 10;
+  for (let i = 0; i < 4; i++) {
+    const legX = -w / 2 + 8 + i * ((w - 16) / 3);
+    const legBounce = cat.onGround ? Math.sin(legPhase + i * Math.PI * 0.5) * 3 : 0;
+    roundRect(legX, -legBounce, legW, legH, 3);
+    ctx.fill();
+  }
+
+  // Hank stripes
+  if (cat.type === 'hank' && !cat.ducking) {
+    ctx.strokeStyle = 'rgba(180, 90, 40, 0.3)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      const sx = -w / 2 + 15 + i * 14;
+      ctx.beginPath();
+      ctx.moveTo(sx, -h + 4);
+      ctx.lineTo(sx + 3, -h + h * 0.4);
+      ctx.stroke();
+    }
+  }
+
+  // Wall stare bubble
+  if (cat.wallStaring && cat.wallStareShowBubble) {
+    ctx.fillStyle = COLORS.white;
+    roundRect(8, -h - 25, 30, 18, 6);
+    ctx.fill();
+    ctx.strokeStyle = COLORS.textLight;
+    ctx.lineWidth = 1;
+    roundRect(8, -h - 25, 30, 18, 6);
+    ctx.stroke();
+    ctx.fillStyle = COLORS.text;
+    ctx.font = '12px Patrick Hand';
+    ctx.textAlign = 'center';
+    ctx.fillText('...', 23, -h - 12);
+  }
+
+  ctx.restore();
+}
+
+function drawRoomba(x, y) {
+  ctx.fillStyle = '#555';
+  ctx.beginPath();
+  ctx.ellipse(x + 25, y + 14, 25, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#444';
+  ctx.beginPath();
+  ctx.ellipse(x + 25, y + 12, 22, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#70E070';
+  ctx.beginPath();
+  ctx.arc(x + 25, y + 10, 3, 0, Math.PI * 2);
+  ctx.fill();
+  // Bumper
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x + 25, y + 14, 24, Math.PI * 0.9, Math.PI * 0.1, true);
+  ctx.stroke();
+}
+
+function drawSprayBottle(x, y, time) {
+  // Bottle body
+  ctx.fillStyle = '#5588CC';
+  roundRect(x + 3, y + 10, 16, 25, 4);
+  ctx.fill();
+  // Nozzle
+  ctx.fillStyle = '#DDDDDD';
+  roundRect(x + 5, y, 12, 14, 3);
+  ctx.fill();
+  // Trigger
+  ctx.fillStyle = '#DDD';
+  ctx.fillRect(x + 1, y + 8, 6, 6);
+  // Water droplets
+  if (Math.sin(time * 10) > 0) {
+    ctx.fillStyle = 'rgba(100, 180, 255, 0.6)';
+    ctx.beginPath();
+    ctx.arc(x - 3, y + 5, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x - 7, y + 2, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawVetCarrier(x, y) {
+  ctx.shadowColor = 'rgba(0,0,0,0.2)';
+  ctx.shadowBlur = 8;
+  // Body
+  ctx.fillStyle = '#8B6B4A';
+  roundRect(x, y, 65, 50, 6);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // Door grid
+  ctx.strokeStyle = '#6B4B2A';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    ctx.moveTo(x + 10 + i * 10, y + 8);
+    ctx.lineTo(x + 10 + i * 10, y + 42);
+    ctx.stroke();
+  }
+  // Handle
+  ctx.strokeStyle = '#5B3B1A';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(x + 32.5, y - 2, 12, Math.PI, 0);
+  ctx.stroke();
+  // Scary eyes inside
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.arc(x + 25, y + 25, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x + 40, y + 25, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.ellipse(x + 25, y + 25, 1.5, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x + 40, y + 25, 1.5, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawBroom(x, y, time) {
+  const sweepAngle = Math.sin(time * 4) * 0.2;
+  ctx.save();
+  ctx.translate(x + 7, y);
+  ctx.rotate(sweepAngle);
+  // Handle
+  ctx.fillStyle = '#9B7B4A';
+  ctx.fillRect(-3, 0, 6, 50);
+  // Bristles
+  ctx.fillStyle = '#C4A040';
+  for (let i = -6; i <= 6; i += 2) {
+    ctx.fillRect(i - 1, 48, 2, 14);
+  }
+  ctx.restore();
+}
+
+function drawPlant(x, y) {
+  // Pot
+  ctx.fillStyle = '#B06030';
+  ctx.beginPath();
+  ctx.moveTo(x + 5, y + 10);
+  ctx.lineTo(x + 30, y + 10);
+  ctx.lineTo(x + 27, y + 30);
+  ctx.lineTo(x + 8, y + 30);
+  ctx.fill();
+  // Soil
+  ctx.fillStyle = '#604020';
+  roundRect(x + 6, y + 10, 23, 6, 2);
+  ctx.fill();
+  // Leaves
+  ctx.fillStyle = '#6B9B50';
+  ctx.beginPath();
+  ctx.ellipse(x + 17, y + 4, 12, 8, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#5A8A40';
+  ctx.beginPath();
+  ctx.ellipse(x + 20, y + 2, 8, 6, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  // Dirt spillage
+  ctx.fillStyle = '#705030';
+  ctx.beginPath();
+  ctx.arc(x + 2, y + 28, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x + 33, y + 26, 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawObstacle(obs, time) {
+  const x = obs.x;
+  const y = obs.y;
+  switch (obs.type) {
+    case 'roomba': drawRoomba(x, y); break;
+    case 'sprayBottle': drawSprayBottle(x, y, time); break;
+    case 'vetCarrier': drawVetCarrier(x, y); break;
+    case 'broom': drawBroom(x, y, time); break;
+    case 'plant': drawPlant(x, y); break;
+  }
+}
+
+function drawTreat(x, y, time) {
+  const bob = Math.sin(time * 4) * 3;
+  ctx.fillStyle = '#D4944A';
+  ctx.beginPath();
+  ctx.ellipse(x + 10, y + 10 + bob, 8, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#B07030';
+  ctx.beginPath();
+  ctx.ellipse(x + 10, y + 10 + bob, 5, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Sparkle
+  ctx.fillStyle = 'rgba(255,255,220,0.7)';
+  ctx.beginPath();
+  ctx.arc(x + 14, y + 6 + bob, 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawYarn(x, y, time) {
+  const bob = Math.sin(time * 3 + 1) * 3;
+  ctx.fillStyle = '#CC5588';
+  ctx.beginPath();
+  ctx.arc(x + 11, y + 11 + bob, 10, 0, Math.PI * 2);
+  ctx.fill();
+  // Yarn strands
+  ctx.strokeStyle = '#E070A0';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x + 11, y + 11 + bob, 7, 0.5, 3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x + 11, y + 11 + bob, 4, 1, 4);
+  ctx.stroke();
+  // Trailing string
+  ctx.strokeStyle = '#CC5588';
+  ctx.beginPath();
+  ctx.moveTo(x + 20, y + 14 + bob);
+  ctx.bezierCurveTo(x + 25, y + 20 + bob, x + 22, y + 25 + bob, x + 28, y + 22 + bob);
+  ctx.stroke();
+}
+
+function drawSunspot(x, y, time) {
+  const pulse = 1 + Math.sin(time * 3) * 0.1;
+  ctx.save();
+  ctx.globalAlpha = 0.5 + Math.sin(time * 2) * 0.15;
+  ctx.fillStyle = '#FFE87A';
+  ctx.shadowColor = '#FFE87A';
+  ctx.shadowBlur = 20;
+  ctx.beginPath();
+  ctx.ellipse(x + 15, y + 8, 15 * pulse, 8 * pulse, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = '#FFF8CC';
+  ctx.beginPath();
+  ctx.ellipse(x + 15, y + 8, 10 * pulse, 5 * pulse, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPawPrint(x, y, time) {
+  const bob = Math.sin(time * 3 + 2) * 2;
+  ctx.fillStyle = COLORS.mint;
+  // Pad
+  ctx.beginPath();
+  ctx.ellipse(x + 10, y + 13 + bob, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Toes
+  const toes = [[-4, -5], [0, -7], [4, -5]];
+  toes.forEach(([tx, ty]) => {
+    ctx.beginPath();
+    ctx.arc(x + 10 + tx, y + 13 + ty + bob, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  // Glow
+  ctx.save();
+  ctx.globalAlpha = 0.3;
+  ctx.shadowColor = COLORS.mint;
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(x + 10, y + 10 + bob, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawCollectible(col, time) {
+  switch (col.type) {
+    case 'treat': drawTreat(col.x, col.y, time); break;
+    case 'yarn': drawYarn(col.x, col.y, time); break;
+    case 'sunspot': drawSunspot(col.x, col.y, time); break;
+    case 'pawPrint': drawPawPrint(col.x, col.y, time); break;
+  }
+}
+
+// ============================================================
+// AUDIO ENGINE
+// ============================================================
+class AudioEngine {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    this.musicPlaying = false;
+    this.musicNodes = [];
+  }
+
+  init() {
+    if (this.ctx) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.masterGain = this.ctx.createGain();
+    this.masterGain.gain.value = 0.3;
+    this.masterGain.connect(this.ctx.destination);
+  }
+
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.masterGain) {
+      this.masterGain.gain.value = this.muted ? 0 : 0.3;
+    }
+  }
+
+  playTone(freq, duration, type = 'square', vol = 0.15) {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start();
+    osc.stop(this.ctx.currentTime + duration);
+  }
+
+  playJump(catType) {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(catType === 'hank' ? 220 : 330, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(catType === 'hank' ? 440 : 660, this.ctx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.15);
+  }
+
+  playDuck() {
+    this.playTone(400, 0.08, 'square', 0.08);
+    setTimeout(() => this.playTone(250, 0.06, 'square', 0.06), 30);
+  }
+
+  playCollect() {
+    if (!this.ctx) return;
+    const notes = [523, 659, 784]; // C E G
+    notes.forEach((f, i) => {
+      setTimeout(() => this.playTone(f, 0.12, 'square', 0.1), i * 50);
+    });
+  }
+
+  playYarnCollect() {
+    if (!this.ctx) return;
+    const notes = [600, 700, 800, 700, 800, 900];
+    notes.forEach((f, i) => {
+      setTimeout(() => this.playTone(f, 0.06, 'triangle', 0.08), i * 30);
+    });
+  }
+
+  playHit() {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(120, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.25);
+    gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.3);
+  }
+
+  playSwap() {
+    this.playTone(500, 0.06, 'sine', 0.1);
+    setTimeout(() => this.playTone(700, 0.06, 'sine', 0.08), 40);
+  }
+
+  playWallStare() {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc2.type = 'sine';
+    osc.frequency.value = 280;
+    osc2.frequency.value = 283; // Slight detune for eerie effect
+    gain.gain.setValueAtTime(0.06, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.8);
+    osc.connect(gain);
+    osc2.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start();
+    osc2.start();
+    osc.stop(this.ctx.currentTime + 0.8);
+    osc2.stop(this.ctx.currentTime + 0.8);
+  }
+
+  playGameOver() {
+    if (!this.ctx) return;
+    const notes = [400, 350, 300, 200];
+    notes.forEach((f, i) => {
+      setTimeout(() => this.playTone(f, 0.3, 'triangle', 0.12), i * 200);
+    });
+  }
+
+  playHighScore() {
+    if (!this.ctx) return;
+    const notes = [523, 659, 784, 1047];
+    notes.forEach((f, i) => {
+      setTimeout(() => this.playTone(f, 0.2, 'square', 0.1), i * 120);
+    });
+  }
+
+  playExtraLife() {
+    if (!this.ctx) return;
+    const notes = [440, 554, 659, 880];
+    notes.forEach((f, i) => {
+      setTimeout(() => this.playTone(f, 0.15, 'triangle', 0.1), i * 80);
+    });
+  }
+
+  startMusic() {
+    if (!this.ctx || this.musicPlaying) return;
+    this.musicPlaying = true;
+    this._playMusicLoop();
+  }
+
+  stopMusic() {
+    this.musicPlaying = false;
+    this.musicNodes.forEach(n => { try { n.stop(); } catch(e) {} });
+    this.musicNodes = [];
+  }
+
+  _playMusicLoop() {
+    if (!this.musicPlaying || !this.ctx) return;
+    const bpm = 140;
+    const beatLen = 60 / bpm;
+    const now = this.ctx.currentTime;
+
+    // Simple chiptune melody — 4 bar loop
+    const melody = [
+      523, 0, 659, 0, 784, 0, 659, 0,
+      523, 0, 784, 0, 659, 0, 523, 0,
+      587, 0, 740, 0, 880, 0, 740, 0,
+      523, 0, 659, 0, 784, 0, 0, 0,
+    ];
+    const bass = [
+      131, 131, 165, 165, 196, 196, 165, 165,
+      131, 131, 196, 196, 165, 165, 131, 131,
+      147, 147, 185, 185, 220, 220, 185, 185,
+      131, 131, 165, 165, 196, 196, 131, 131,
+    ];
+
+    melody.forEach((freq, i) => {
+      if (freq === 0) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      const t = now + i * beatLen * 0.5;
+      gain.gain.setValueAtTime(0.04, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + beatLen * 0.45);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + beatLen * 0.5);
+      this.musicNodes.push(osc);
+    });
+
+    bass.forEach((freq, i) => {
+      if (freq === 0) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const t = now + i * beatLen * 0.5;
+      gain.gain.setValueAtTime(0.05, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + beatLen * 0.45);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + beatLen * 0.5);
+      this.musicNodes.push(osc);
+    });
+
+    const loopDuration = melody.length * beatLen * 0.5;
+    this._musicTimeout = setTimeout(() => {
+      this.musicNodes = [];
+      this._playMusicLoop();
+    }, loopDuration * 1000);
+  }
+}
+
+const audio = new AudioEngine();
+
+// ============================================================
+// PARTICLE SYSTEM
+// ============================================================
+class Particle {
+  constructor(x, y, color, vx, vy, life = 0.5, size = 3) {
+    this.x = x; this.y = y;
+    this.color = color;
+    this.vx = vx; this.vy = vy;
+    this.life = life;
+    this.maxLife = life;
+    this.size = size;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.vy += 300 * dt; // Gravity
+    this.life -= dt;
+  }
+
+  draw() {
+    const alpha = Math.max(0, this.life / this.maxLife);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size * alpha, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+let particles = [];
+
+function spawnParticles(x, y, color, count = 8) {
+  for (let i = 0; i < count; i++) {
+    particles.push(new Particle(
+      x, y, color,
+      randomRange(-120, 120),
+      randomRange(-200, -50),
+      randomRange(0.3, 0.7),
+      randomRange(2, 5)
+    ));
+  }
+}
+
+function spawnCollectParticles(x, y, color) {
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 12) * Math.PI * 2;
+    particles.push(new Particle(
+      x, y, color,
+      Math.cos(angle) * 80,
+      Math.sin(angle) * 80,
+      0.4, 3
+    ));
+  }
+}
+
+// ============================================================
+// SCROLLING BACKGROUND
+// ============================================================
+class ScrollingBackground {
+  constructor() {
+    this.offset1 = 0; // Slow layer
+    this.offset2 = 0; // Medium layer
+    this.offset3 = 0; // Fast layer (floor)
+  }
+
+  update(dt, speed) {
+    this.offset1 = (this.offset1 + speed * 0.3 * dt) % LOGICAL_W;
+    this.offset2 = (this.offset2 + speed * 0.6 * dt) % LOGICAL_W;
+    this.offset3 = (this.offset3 + speed * dt) % LOGICAL_W;
+  }
+
+  draw(time) {
+    // Sky / wall
+    ctx.fillStyle = COLORS.parchment;
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    // Layer 1: Wall with wallpaper pattern
+    this._drawWallLayer(time);
+
+    // Layer 2: Furniture silhouettes
+    this._drawFurnitureLayer(time);
+
+    // Layer 3: Floor
+    this._drawFloorLayer(time);
+  }
+
+  _drawWallLayer(time) {
+    const off = this.offset1;
+    // Wallpaper stripes
+    ctx.fillStyle = COLORS.wallpaper1;
+    for (let i = -1; i < 30; i++) {
+      const x = i * 60 - (off % 60);
+      ctx.fillRect(x, 0, 30, GROUND_Y);
+    }
+    // Subtle pattern
+    ctx.fillStyle = 'rgba(200, 180, 140, 0.15)';
+    for (let i = -1; i < 20; i++) {
+      const x = i * 120 - (off % 120);
+      // Picture frame
+      ctx.strokeStyle = 'rgba(139, 107, 74, 0.2)';
+      ctx.lineWidth = 2;
+      roundRect(x + 20, 30, 60, 45, 3);
+      ctx.stroke();
+      // Frame content
+      ctx.fillStyle = 'rgba(200, 180, 140, 0.15)';
+      roundRect(x + 24, 34, 52, 37, 1);
+      ctx.fill();
+    }
+
+    // Baseboard
+    ctx.fillStyle = '#B09070';
+    ctx.fillRect(0, GROUND_Y - 8, LOGICAL_W, 8);
+    ctx.fillStyle = '#A08060';
+    ctx.fillRect(0, GROUND_Y - 3, LOGICAL_W, 3);
+  }
+
+  _drawFurnitureLayer(time) {
+    const off = this.offset2;
+    ctx.fillStyle = 'rgba(120, 90, 60, 0.12)';
+
+    // Furniture silhouettes that repeat
+    for (let i = -1; i < 5; i++) {
+      const baseX = i * 300 - (off % 300);
+
+      // Couch
+      roundRect(baseX + 10, GROUND_Y - 70, 80, 65, 8);
+      ctx.fill();
+      // Couch back
+      roundRect(baseX + 10, GROUND_Y - 85, 80, 20, 6);
+      ctx.fill();
+
+      // Bookshelf
+      roundRect(baseX + 130, GROUND_Y - 100, 40, 95, 3);
+      ctx.fill();
+      // Shelf lines
+      ctx.strokeStyle = 'rgba(120, 90, 60, 0.08)';
+      ctx.lineWidth = 1;
+      for (let s = 0; s < 4; s++) {
+        ctx.beginPath();
+        ctx.moveTo(baseX + 132, GROUND_Y - 80 + s * 22);
+        ctx.lineTo(baseX + 168, GROUND_Y - 80 + s * 22);
+        ctx.stroke();
+      }
+
+      // Plant on stand
+      ctx.fillStyle = 'rgba(100, 140, 70, 0.12)';
+      ctx.beginPath();
+      ctx.arc(baseX + 220, GROUND_Y - 60, 20, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(120, 90, 60, 0.12)';
+      ctx.fillRect(baseX + 215, GROUND_Y - 40, 10, 35);
+    }
+  }
+
+  _drawFloorLayer(time) {
+    const off = this.offset3;
+
+    // Main floor
+    ctx.fillStyle = COLORS.floor;
+    ctx.fillRect(0, GROUND_Y, LOGICAL_W, LOGICAL_H - GROUND_Y);
+
+    // Floor boards
+    ctx.strokeStyle = COLORS.floorDark;
+    ctx.lineWidth = 1;
+    for (let i = -1; i < 25; i++) {
+      const x = i * 60 - (off % 60);
+      ctx.beginPath();
+      ctx.moveTo(x, GROUND_Y);
+      ctx.lineTo(x, LOGICAL_H);
+      ctx.stroke();
+    }
+
+    // Rug
+    const rugX = 200 - (off % 400);
+    for (let r = -1; r < 3; r++) {
+      const rx = rugX + r * 400;
+      ctx.fillStyle = 'rgba(192, 112, 80, 0.25)';
+      roundRect(rx, GROUND_Y + 8, 160, 40, 4);
+      ctx.fill();
+      // Rug pattern
+      ctx.fillStyle = 'rgba(168, 88, 56, 0.15)';
+      roundRect(rx + 10, GROUND_Y + 14, 140, 28, 3);
+      ctx.fill();
+    }
+
+    // Scattered toys
+    ctx.fillStyle = 'rgba(200, 100, 100, 0.15)';
+    for (let i = -1; i < 8; i++) {
+      const tx = i * 150 + 50 - (off % 150);
+      ctx.beginPath();
+      ctx.arc(tx, GROUND_Y + 35, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// ============================================================
+// INPUT HANDLER
+// ============================================================
+class InputHandler {
+  constructor() {
+    this.keys = {};
+    this.jumpPressed = false;
+    this.duckPressed = false;
+    this.swapPressed = false;
+    this.touchStartX = 0;
+    this.touchStartY = 0;
+    this.anyKeyPressed = false;
+    this.muteClicked = false;
+
+    window.addEventListener('keydown', e => {
+      if (['Space', 'ArrowUp', 'ArrowDown', 'Tab', 'KeyS', 'KeyX'].includes(e.code)) {
+        e.preventDefault();
+      }
+      if (!this.keys[e.code]) {
+        this.keys[e.code] = true;
+        this.anyKeyPressed = true;
+        if (e.code === 'Space' || e.code === 'ArrowUp') this.jumpPressed = true;
+        if (e.code === 'ArrowDown' || e.code === 'KeyS') this.duckPressed = true;
+        if (e.code === 'Tab' || e.code === 'KeyX') this.swapPressed = true;
+      }
+    });
+
+    window.addEventListener('keyup', e => {
+      this.keys[e.code] = false;
+      if (e.code === 'ArrowDown' || e.code === 'KeyS') this.duckPressed = false;
+    });
+
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      this.touchStartX = touch.clientX;
+      this.touchStartY = touch.clientY;
+      this.anyKeyPressed = true;
+
+      // Check mute button
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = LOGICAL_W / rect.width;
+      const scaleY = LOGICAL_H / rect.height;
+      const cx = (touch.clientX - rect.left) * scaleX;
+      const cy = (touch.clientY - rect.top) * scaleY;
+      if (cx > LOGICAL_W - 45 && cy < 35) {
+        this.muteClicked = true;
+        return;
+      }
+
+      this.jumpPressed = true;
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      if (e.changedTouches.length === 0) return;
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - this.touchStartX;
+      const dy = touch.clientY - this.touchStartY;
+
+      if (Math.abs(dy) > 30 && dy > 0) {
+        this.duckPressed = true;
+        setTimeout(() => { this.duckPressed = false; }, 300);
+      }
+      if (dx < -40) {
+        this.swapPressed = true;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('mousedown', e => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = LOGICAL_W / rect.width;
+      const scaleY = LOGICAL_H / rect.height;
+      const cx = (e.clientX - rect.left) * scaleX;
+      const cy = (e.clientY - rect.top) * scaleY;
+      if (cx > LOGICAL_W - 45 && cy < 35) {
+        this.muteClicked = true;
+      }
+    });
+  }
+
+  consumeJump() { const v = this.jumpPressed; this.jumpPressed = false; return v; }
+  consumeSwap() { const v = this.swapPressed; this.swapPressed = false; return v; }
+  consumeAnyKey() { const v = this.anyKeyPressed; this.anyKeyPressed = false; return v; }
+  consumeMuteClick() { const v = this.muteClicked; this.muteClicked = false; return v; }
+  isDucking() { return this.duckPressed; }
+}
+
+// ============================================================
+// GAME STATE & ENTITIES
+// ============================================================
+const gameState = {
+  screen: 'title', // 'title', 'playing', 'gameover'
+  score: 0,
+  highScore: parseInt(localStorage.getItem('zoomies_high') || '0'),
+  lives: 3,
+  activeCat: 'hank',
+  gameSpeed: 200,
+  time: 0,
+  difficulty: 0,
+  screenShake: 0,
+  newHighScore: false,
+  speedBoostTimer: 0,
+};
+
+class Cat {
+  constructor(type) {
+    this.type = type;
+    const cfg = CAT_CONFIG[type];
+    this.x = 80;
+    this.y = GROUND_Y - cfg.height;
+    this.vy = 0;
+    this.width = cfg.width;
+    this.height = cfg.height;
+    this.onGround = true;
+    this.ducking = false;
+    this.jumps = 0;
+    this.maxJumps = cfg.canDoubleJump ? 2 : 1;
+    this.stunTimer = 0;
+    this.facingLeft = false;
+    this.invincible = false;
+    this.invincibleTimer = 0;
+    // Bailey-specific
+    this.wallStaring = false;
+    this.wallStareTimer = 0;
+    this.wallStareCooldown = 0;
+    this.wallStareShowBubble = false;
+  }
+
+  reset() {
+    const cfg = CAT_CONFIG[this.type];
+    this.y = GROUND_Y - cfg.height;
+    this.vy = 0;
+    this.onGround = true;
+    this.ducking = false;
+    this.jumps = 0;
+    this.stunTimer = 0;
+    this.invincible = false;
+    this.invincibleTimer = 0;
+    this.wallStaring = false;
+    this.wallStareTimer = 0;
+    this.wallStareCooldown = 0;
+    this.wallStareShowBubble = false;
+  }
+
+  getHitbox() {
+    const cfg = CAT_CONFIG[this.type];
+    const h = this.ducking ? cfg.duckHeight : cfg.height;
+    const y = this.ducking ? GROUND_Y - h : this.y;
+    return { x: this.x + 6, y: y + 4, w: cfg.width - 12, h: h - 8 };
+  }
+
+  jump() {
+    if (this.stunTimer > 0 || this.wallStaring) return;
+    const cfg = CAT_CONFIG[this.type];
+    if (this.jumps < this.maxJumps) {
+      this.vy = cfg.jumpVel;
+      if (this.jumps === 1 && this.type === 'bailey') {
+        // Second jump slightly sideways (visual only, doesn't change x)
+        this.vy = cfg.jumpVel * 0.85;
+      }
+      this.jumps++;
+      this.onGround = false;
+      this.ducking = false;
+      audio.playJump(this.type);
+    }
+  }
+
+  duck(active) {
+    if (this.stunTimer > 0 || this.wallStaring) return;
+    if (this.onGround) {
+      this.ducking = active;
+      if (active) {
+        audio.playDuck();
+      }
+    }
+  }
+
+  update(dt, isActive) {
+    const cfg = CAT_CONFIG[this.type];
+
+    // Stun
+    if (this.stunTimer > 0) {
+      this.stunTimer -= dt;
+    }
+
+    // Invincibility
+    if (this.invincibleTimer > 0) {
+      this.invincibleTimer -= dt;
+      if (this.invincibleTimer <= 0) {
+        this.invincible = false;
+      }
+    }
+
+    // Bailey wall stare
+    if (this.type === 'bailey' && isActive) {
+      this.wallStareCooldown -= dt;
+      if (!this.wallStaring && this.wallStareCooldown <= 0 && this.onGround) {
+        // Random chance to start wall stare
+        if (Math.random() < 0.003) {
+          this.wallStareShowBubble = true;
+          this.wallStareTimer = 0.5; // Warning time
+          audio.playWallStare();
+        }
+      }
+      if (this.wallStareShowBubble && !this.wallStaring) {
+        this.wallStareTimer -= dt;
+        if (this.wallStareTimer <= 0) {
+          this.wallStaring = true;
+          this.wallStareTimer = 0.8; // Freeze time
+        }
+      }
+      if (this.wallStaring) {
+        this.wallStareTimer -= dt;
+        if (this.wallStareTimer <= 0) {
+          this.wallStaring = false;
+          this.wallStareShowBubble = false;
+          this.wallStareCooldown = 8 + Math.random() * 5;
+        }
+      }
+    }
+
+    // Gravity
+    if (!this.onGround) {
+      const gravMult = this.type === 'hank' ? 0.85 : 1.0; // Hank is floatier
+      this.vy += GRAVITY * gravMult * dt;
+      this.y += this.vy * dt;
+
+      const groundLevel = GROUND_Y - (this.ducking ? cfg.duckHeight : cfg.height);
+      if (this.y >= groundLevel) {
+        this.y = groundLevel;
+        this.vy = 0;
+        this.onGround = true;
+        this.jumps = 0;
+      }
+    }
+
+    // Update height for ducking
+    if (this.ducking && this.onGround) {
+      this.height = cfg.duckHeight;
+      this.y = GROUND_Y - cfg.duckHeight;
+    } else if (!this.ducking) {
+      this.height = cfg.height;
+      if (this.onGround) {
+        this.y = GROUND_Y - cfg.height;
+      }
+    }
+  }
+}
+
+class Obstacle {
+  constructor(type) {
+    const cfg = OBSTACLE_TYPES[type];
+    this.type = type;
+    this.width = cfg.width;
+    this.height = cfg.height;
+    this.speedMult = cfg.speed;
+    this.x = LOGICAL_W + 20;
+
+    if (type === 'sprayBottle') {
+      this.y = GROUND_Y - 100 - Math.random() * 60;
+      this.vy = 80;
+      this.arc = true;
+    } else {
+      this.y = GROUND_Y - cfg.height;
+      this.vy = 0;
+      this.arc = false;
+    }
+
+    // Broom sweep phase
+    if (type === 'broom') {
+      this.sweepPhase = 0;
+    }
+  }
+
+  getHitbox() {
+    return { x: this.x + 3, y: this.y + 3, w: this.width - 6, h: this.height - 6 };
+  }
+
+  update(dt, speed) {
+    this.x -= speed * this.speedMult * dt;
+
+    if (this.arc) {
+      this.vy += 200 * dt;
+      this.y += this.vy * dt;
+      if (this.y > GROUND_Y - this.height) {
+        this.y = GROUND_Y - this.height;
+        this.vy = 0;
+      }
+    }
+
+    if (this.type === 'broom') {
+      this.sweepPhase += dt * 2;
+      const phase = Math.sin(this.sweepPhase);
+      if (phase > 0.5) {
+        this.y = GROUND_Y - this.height - 20;
+      } else {
+        this.y = GROUND_Y - this.height;
+      }
+    }
+  }
+}
+
+class Collectible {
+  constructor(type) {
+    const cfg = COLLECTIBLE_TYPES[type];
+    this.type = type;
+    this.width = cfg.width;
+    this.height = cfg.height;
+    this.points = cfg.points;
+    this.x = LOGICAL_W + 20;
+    this.y = GROUND_Y - cfg.height - Math.random() * 40 - 10;
+    this.collected = false;
+  }
+
+  getHitbox() {
+    return { x: this.x, y: this.y, w: this.width, h: this.height };
+  }
+
+  update(dt, speed) {
+    this.x -= speed * dt;
+  }
+}
+
+// ============================================================
+// GAME INSTANCE
+// ============================================================
+const bg = new ScrollingBackground();
+const input = new InputHandler();
+let hank = new Cat('hank');
+let bailey = new Cat('bailey');
+let obstacles = [];
+let collectibles = [];
+let obstacleTimer = 0;
+let collectibleTimer = 0;
+let lastTime = 0;
+
+function getActiveCat() {
+  return gameState.activeCat === 'hank' ? hank : bailey;
+}
+function getInactiveCat() {
+  return gameState.activeCat === 'hank' ? bailey : hank;
+}
+
+function resetGame() {
+  gameState.score = 0;
+  gameState.lives = 3;
+  gameState.activeCat = 'hank';
+  gameState.gameSpeed = 200;
+  gameState.time = 0;
+  gameState.difficulty = 0;
+  gameState.screenShake = 0;
+  gameState.newHighScore = false;
+  gameState.speedBoostTimer = 0;
+  hank.reset();
+  bailey.reset();
+  obstacles = [];
+  collectibles = [];
+  particles = [];
+  obstacleTimer = 2;
+  collectibleTimer = 3;
+}
+
+function spawnObstacle() {
+  const types = Object.keys(OBSTACLE_TYPES);
+  const weights = [3, 2, 1, 2, 2]; // roomba most common, carrier rarest
+  let total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  let chosen = types[0];
+  for (let i = 0; i < types.length; i++) {
+    r -= weights[i];
+    if (r <= 0) { chosen = types[i]; break; }
+  }
+  obstacles.push(new Obstacle(chosen));
+}
+
+function spawnCollectible() {
+  const r = Math.random();
+  let type;
+  if (r < 0.5) type = 'treat';
+  else if (r < 0.8) type = 'yarn';
+  else if (r < 0.95) type = 'sunspot';
+  else type = 'pawPrint';
+  collectibles.push(new Collectible(type));
+}
+
+function handleCollisions() {
+  const cat = getActiveCat();
+  if (cat.stunTimer > 0 || cat.invincible) return;
+
+  const catBox = cat.getHitbox();
+
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const obs = obstacles[i];
+    if (aabbOverlap(catBox, obs.getHitbox())) {
+      // Hit!
+      gameState.lives--;
+      cat.stunTimer = 1.0;
+      gameState.screenShake = 0.3;
+      audio.playHit();
+      spawnParticles(cat.x + cat.width / 2, cat.y + cat.height / 2,
+        cat.type === 'hank' ? COLORS.orange : COLORS.black, 12);
+      obstacles.splice(i, 1);
+
+      if (gameState.lives <= 0) {
+        gameState.screen = 'gameover';
+        audio.stopMusic();
+        if (gameState.score > gameState.highScore) {
+          gameState.highScore = gameState.score;
+          gameState.newHighScore = true;
+          localStorage.setItem('zoomies_high', gameState.highScore.toString());
+          audio.playHighScore();
+        } else {
+          audio.playGameOver();
+        }
+      }
+      return;
+    }
+  }
+}
+
+function handleCollectibles() {
+  const cat = getActiveCat();
+  const catBox = cat.getHitbox();
+
+  // Hank auto-collects treats — use wider hitbox
+  const hankBox = gameState.activeCat === 'hank'
+    ? { x: catBox.x - 15, y: catBox.y - 15, w: catBox.w + 30, h: catBox.h + 30 }
+    : catBox;
+
+  for (let i = collectibles.length - 1; i >= 0; i--) {
+    const col = collectibles[i];
+    if (col.collected) continue;
+
+    const colBox = col.getHitbox();
+    const checkBox = (col.type === 'treat' && gameState.activeCat === 'hank') ? hankBox : catBox;
+
+    if (aabbOverlap(checkBox, colBox)) {
+      col.collected = true;
+      spawnCollectParticles(col.x + col.width / 2, col.y + col.height / 2,
+        COLLECTIBLE_TYPES[col.type].color);
+
+      switch (col.type) {
+        case 'treat':
+          gameState.score += 10;
+          audio.playCollect();
+          break;
+        case 'yarn':
+          gameState.score += 25;
+          gameState.speedBoostTimer = 2;
+          audio.playYarnCollect();
+          break;
+        case 'sunspot':
+          cat.invincible = true;
+          cat.invincibleTimer = 3;
+          audio.playCollect();
+          break;
+        case 'pawPrint':
+          if (gameState.lives < 3) {
+            gameState.lives++;
+            audio.playExtraLife();
+          } else {
+            gameState.score += 50;
+            audio.playCollect();
+          }
+          break;
+      }
+      collectibles.splice(i, 1);
+    }
+  }
+}
+
+// ============================================================
+// SCREEN RENDERERS
+// ============================================================
+function drawTitleScreen(time) {
+  bg.draw(time);
+
+  // Darken overlay
+  ctx.fillStyle = 'rgba(245, 237, 214, 0.6)';
+  ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = COLORS.text;
+  ctx.font = '900 48px Nunito, sans-serif';
+  const titleBounce = Math.sin(time * 2) * 3;
+  ctx.fillText('THE ZOOMIES', LOGICAL_W / 2, 80 + titleBounce);
+
+  // Subtitle
+  ctx.font = '20px "Patrick Hand", cursive';
+  ctx.fillStyle = COLORS.textLight;
+  ctx.fillText('3am. No reason. Full speed.', LOGICAL_W / 2, 110);
+
+  // Draw cats on title screen
+  const titleHank = { type: 'hank', x: LOGICAL_W / 2 - 120, y: GROUND_Y - 45,
+    onGround: true, ducking: false, stunTimer: 0, facingLeft: false,
+    invincible: false, wallStaring: false, wallStareShowBubble: false };
+  const titleBailey = { type: 'bailey', x: LOGICAL_W / 2 + 60, y: GROUND_Y - 38,
+    onGround: true, ducking: false, stunTimer: 0, facingLeft: true,
+    invincible: false, wallStaring: false, wallStareShowBubble: false };
+
+  drawCat(titleHank, time);
+  drawCat(titleBailey, time);
+
+  // Start prompt
+  const pulse = 0.5 + Math.sin(time * 3) * 0.5;
+  ctx.globalAlpha = pulse;
+  ctx.font = '22px "Patrick Hand", cursive';
+  ctx.fillStyle = COLORS.text;
+  ctx.fillText('[ Press Space to Start ]', LOGICAL_W / 2, GROUND_Y + 35);
+  ctx.globalAlpha = 1;
+
+  // High score
+  if (gameState.highScore > 0) {
+    ctx.font = '16px "Patrick Hand", cursive';
+    ctx.fillStyle = COLORS.textLight;
+    ctx.fillText('High Score: ' + gameState.highScore, LOGICAL_W / 2, GROUND_Y + 55);
+  }
+
+  drawMuteButton();
+}
+
+function drawHUD() {
+  // Score
+  ctx.textAlign = 'left';
+  ctx.font = '28px "Patrick Hand", cursive';
+  ctx.fillStyle = COLORS.text;
+  ctx.fillText(gameState.score.toString(), 15, 30);
+
+  // High score
+  ctx.textAlign = 'right';
+  ctx.font = '14px "Patrick Hand", cursive';
+  ctx.fillStyle = COLORS.textLight;
+  ctx.fillText('Best: ' + gameState.highScore, LOGICAL_W - 50, 28);
+
+  // Lives
+  ctx.textAlign = 'left';
+  for (let i = 0; i < 3; i++) {
+    const lx = 15 + i * 22;
+    const ly = LOGICAL_H - 25;
+    if (i < gameState.lives) {
+      ctx.fillStyle = COLORS.mint;
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    }
+    // Mini paw print
+    ctx.beginPath();
+    ctx.ellipse(lx + 6, ly + 5, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(lx + 2, ly - 1, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(lx + 6, ly - 2, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(lx + 10, ly - 1, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Active cat indicator
+  const activeCat = getActiveCat();
+  const indX = 15;
+  const indY = 42;
+  ctx.fillStyle = activeCat.type === 'hank' ? COLORS.orange : COLORS.black;
+  ctx.shadowColor = COLORS.mint;
+  ctx.shadowBlur = 8;
+  roundRect(indX, indY, 20, 16, 4);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // Eyes
+  ctx.fillStyle = COLORS.white;
+  ctx.beginPath();
+  ctx.arc(indX + 7, indY + 7, 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(indX + 13, indY + 7, 2, 0, Math.PI * 2);
+  ctx.fill();
+  // Name
+  ctx.fillStyle = COLORS.text;
+  ctx.font = '12px "Patrick Hand", cursive';
+  ctx.fillText(activeCat.type === 'hank' ? 'Hank' : 'Bailey', indX + 24, indY + 13);
+
+  // Speed boost indicator
+  if (gameState.speedBoostTimer > 0) {
+    ctx.fillStyle = COLORS.mint;
+    ctx.font = '14px "Patrick Hand", cursive';
+    ctx.textAlign = 'center';
+    ctx.fillText('ZOOM!', LOGICAL_W / 2, 20);
+    ctx.textAlign = 'left';
+  }
+
+  drawMuteButton();
+}
+
+function drawMuteButton() {
+  ctx.textAlign = 'center';
+  ctx.font = '20px sans-serif';
+  ctx.fillStyle = COLORS.text;
+  ctx.fillText(audio.muted ? '\u{1F507}' : '\u{1F50A}', LOGICAL_W - 22, 24);
+}
+
+function drawGameOverScreen(time) {
+  bg.draw(time);
+
+  // Dark overlay
+  ctx.fillStyle = 'rgba(74, 55, 40, 0.5)';
+  ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.font = '900 42px Nunito, sans-serif';
+  ctx.fillStyle = COLORS.white;
+  ctx.fillText('ZOOMIES OVER', LOGICAL_W / 2, 70);
+
+  // Tired cats
+  const tiredHank = { type: 'hank', x: LOGICAL_W / 2 - 80, y: GROUND_Y - 22,
+    onGround: true, ducking: true, stunTimer: 0, facingLeft: false,
+    invincible: false, wallStaring: false, wallStareShowBubble: false };
+  const tiredBailey = { type: 'bailey', x: LOGICAL_W / 2 + 30, y: GROUND_Y - 18,
+    onGround: true, ducking: true, stunTimer: 0, facingLeft: true,
+    invincible: false, wallStaring: false, wallStareShowBubble: false };
+  drawCat(tiredHank, time);
+  drawCat(tiredBailey, time);
+
+  // Score
+  ctx.font = '26px "Patrick Hand", cursive';
+  ctx.fillStyle = COLORS.white;
+  ctx.fillText('Score: ' + gameState.score, LOGICAL_W / 2, 120);
+
+  // High score
+  ctx.font = '20px "Patrick Hand", cursive';
+  if (gameState.newHighScore) {
+    ctx.fillStyle = COLORS.mint;
+    ctx.fillText('NEW HIGH SCORE!', LOGICAL_W / 2, 148);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('Best: ' + gameState.highScore, LOGICAL_W / 2, 148);
+  }
+
+  // Restart
+  const pulse = 0.5 + Math.sin(time * 3) * 0.5;
+  ctx.globalAlpha = pulse;
+  ctx.font = '22px "Patrick Hand", cursive';
+  ctx.fillStyle = COLORS.white;
+  ctx.fillText('[ Again? ]', LOGICAL_W / 2, 180);
+  ctx.globalAlpha = 1;
+
+  drawMuteButton();
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop(timestamp) {
+  requestAnimationFrame(gameLoop);
+
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // Cap delta
+  lastTime = timestamp;
+  gameState.time += dt;
+  const time = gameState.time;
+
+  // Mute toggle
+  if (input.consumeMuteClick()) {
+    audio.init();
+    audio.toggleMute();
+  }
+
+  // Screen shake
+  ctx.save();
+  if (gameState.screenShake > 0) {
+    gameState.screenShake -= dt;
+    const shakeX = (Math.random() - 0.5) * 8;
+    const shakeY = (Math.random() - 0.5) * 8;
+    ctx.translate(shakeX, shakeY);
+  }
+
+  switch (gameState.screen) {
+    case 'title':
+      bg.update(dt, 60);
+      drawTitleScreen(time);
+      if (input.consumeJump() || input.consumeAnyKey()) {
+        audio.init();
+        resetGame();
+        gameState.screen = 'playing';
+        audio.startMusic();
+      }
+      break;
+
+    case 'playing':
+      updateGame(dt, time);
+      drawGame(time);
+      break;
+
+    case 'gameover':
+      drawGameOverScreen(time);
+      if (input.consumeJump() || input.consumeAnyKey()) {
+        resetGame();
+        gameState.screen = 'playing';
+        audio.startMusic();
+      }
+      break;
+  }
+
+  ctx.restore();
+}
+
+function updateGame(dt, time) {
+  const cat = getActiveCat();
+  const inactive = getInactiveCat();
+
+  // Difficulty ramp
+  gameState.difficulty += dt * 0.02;
+  gameState.gameSpeed = 200 + gameState.difficulty * 80;
+
+  // Speed boost
+  let effectiveSpeed = gameState.gameSpeed;
+  if (gameState.speedBoostTimer > 0) {
+    gameState.speedBoostTimer -= dt;
+    effectiveSpeed *= 1.4;
+  }
+
+  // Score from distance
+  gameState.score += Math.floor(dt * effectiveSpeed * 0.05);
+
+  // Input
+  if (input.consumeJump()) cat.jump();
+  cat.duck(input.isDucking());
+  if (input.consumeSwap()) {
+    gameState.activeCat = gameState.activeCat === 'hank' ? 'bailey' : 'hank';
+    audio.playSwap();
+    // Transfer position context
+    const newActive = getActiveCat();
+    if (newActive.stunTimer <= 0) {
+      newActive.wallStaring = false;
+      newActive.wallStareShowBubble = false;
+    }
+  }
+
+  // Update cats
+  cat.update(dt, true);
+  inactive.update(dt, false);
+
+  // Update background
+  bg.update(dt, effectiveSpeed);
+
+  // Spawn obstacles
+  obstacleTimer -= dt;
+  if (obstacleTimer <= 0) {
+    spawnObstacle();
+    obstacleTimer = Math.max(0.8, 2.5 - gameState.difficulty * 0.15) + Math.random() * 1.0;
+  }
+
+  // Spawn collectibles
+  collectibleTimer -= dt;
+  if (collectibleTimer <= 0) {
+    spawnCollectible();
+    collectibleTimer = 2 + Math.random() * 3;
+  }
+
+  // Update obstacles
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    obstacles[i].update(dt, effectiveSpeed);
+    if (obstacles[i].x < -80) obstacles.splice(i, 1);
+  }
+
+  // Update collectibles
+  for (let i = collectibles.length - 1; i >= 0; i--) {
+    collectibles[i].update(dt, effectiveSpeed);
+    if (collectibles[i].x < -40) collectibles.splice(i, 1);
+  }
+
+  // Update particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    particles[i].update(dt);
+    if (particles[i].life <= 0) particles.splice(i, 1);
+  }
+
+  // Collisions
+  handleCollisions();
+  handleCollectibles();
+}
+
+function drawGame(time) {
+  bg.draw(time);
+
+  // Draw collectibles
+  collectibles.forEach(c => drawCollectible(c, time));
+
+  // Draw obstacles
+  obstacles.forEach(o => drawObstacle(o, time));
+
+  // Draw inactive cat (slightly transparent, follows behind)
+  const inactive = getInactiveCat();
+  ctx.save();
+  ctx.globalAlpha = 0.4;
+  drawCat(inactive, time);
+  ctx.restore();
+
+  // Draw active cat
+  drawCat(getActiveCat(), time);
+
+  // Draw particles
+  particles.forEach(p => p.draw());
+
+  // HUD
+  drawHUD();
+}
+
+// ============================================================
+// INIT
+// ============================================================
+function init() {
+  lastTime = performance.now();
+  requestAnimationFrame(gameLoop);
+}
+
+init();
+</script>
+</body>
+</html>
