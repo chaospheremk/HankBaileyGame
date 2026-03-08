@@ -62,7 +62,7 @@ const COLORS = {
 const CAT_CONFIG = {
   hank: {
     width: 65, height: 48,
-    jumpVel: -520,
+    jumpVel: -620,
     canDoubleJump: false,
     duckHeight: 24,
     name: 'Hank',
@@ -70,19 +70,19 @@ const CAT_CONFIG = {
   },
   bailey: {
     width: 50, height: 40,
-    jumpVel: -480,
+    jumpVel: -520,
     canDoubleJump: true,
     duckHeight: 20,
     name: 'Bailey',
-    desc: 'Speedy  |  Double Jump  |  Wall Stare',
+    desc: 'Speedy  |  Double Jump  |  Sometimes Stares at Walls',
   },
 };
 
 const OBSTACLE_TYPES = {
   roomba: { width: 50, height: 20, speed: 1.0 },
   sprayBottle: { width: 22, height: 35, speed: 0.8 },
-  vetCarrier: { width: 65, height: 55, speed: 0.6 },
-  broom: { width: 15, height: 60, speed: 0.85 },
+  vetCarrier: { width: 55, height: 42, speed: 0.6 },
+  broom: { width: 15, height: 45, speed: 0.85 },
   plant: { width: 35, height: 30, speed: 1.1 },
 };
 
@@ -434,24 +434,26 @@ function _drawCatStanding(cat, isHank, w, h, time, bodyBounce, breathe) {
 
   // ---- WALL STARE BUBBLE ----
   if (cat.wallStareShowBubble) {
+    const bubbleText = cat.wallStaring ? '  . . .' : 'wall?!';
+    const bubbleW = cat.wallStaring ? 40 : 46;
     ctx.fillStyle = COLORS.white;
-    roundRect(headX + 12, headY - headR - 22, 32, 18, 8);
+    roundRect(headX + 10, headY - headR - 24, bubbleW, 20, 8);
     ctx.fill();
     ctx.strokeStyle = COLORS.textLight;
     ctx.lineWidth = 1;
-    roundRect(headX + 12, headY - headR - 22, 32, 18, 8);
+    roundRect(headX + 10, headY - headR - 24, bubbleW, 20, 8);
     ctx.stroke();
     // Little triangle pointer
     ctx.fillStyle = COLORS.white;
     ctx.beginPath();
     ctx.moveTo(headX + 16, headY - headR - 4);
-    ctx.lineTo(headX + 20, headY - headR - 4);
+    ctx.lineTo(headX + 22, headY - headR - 4);
     ctx.lineTo(headX + 15, headY - headR + 2);
     ctx.fill();
     ctx.fillStyle = COLORS.text;
     ctx.font = '13px "Patrick Hand", cursive';
     ctx.textAlign = 'center';
-    ctx.fillText('...', headX + 28, headY - headR - 9);
+    ctx.fillText(bubbleText, headX + 10 + bubbleW / 2, headY - headR - 10);
   }
 }
 
@@ -1261,13 +1263,13 @@ class Cat {
       if (this.invincibleTimer <= 0) this.invincible = false;
     }
 
-    // Bailey wall stare
+    // Bailey wall stare — funny pause, not punishing (invulnerable during it)
     if (this.type === 'bailey') {
       this.wallStareCooldown -= dt;
       if (!this.wallStaring && !this.wallStareShowBubble && this.wallStareCooldown <= 0 && this.onGround) {
-        if (Math.random() < 0.003) {
+        if (Math.random() < 0.002) {
           this.wallStareShowBubble = true;
-          this.wallStareTimer = 0.5;
+          this.wallStareTimer = 0.7; // Warning: "wall?!" bubble
           audio.playWallStare();
         }
       }
@@ -1275,7 +1277,8 @@ class Cat {
         this.wallStareTimer -= dt;
         if (this.wallStareTimer <= 0) {
           this.wallStaring = true;
-          this.wallStareTimer = 0.8;
+          this.invincible = true; // Can't be hurt while being weird
+          this.wallStareTimer = 0.5; // Short freeze
         }
       }
       if (this.wallStaring) {
@@ -1283,7 +1286,8 @@ class Cat {
         if (this.wallStareTimer <= 0) {
           this.wallStaring = false;
           this.wallStareShowBubble = false;
-          this.wallStareCooldown = 8 + Math.random() * 5;
+          this.invincible = false;
+          this.wallStareCooldown = 12 + Math.random() * 8;
         }
       }
     }
